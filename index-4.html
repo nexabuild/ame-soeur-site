@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Âme Sœur — Rencontres sérieuses pour tous</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, getDocs, addDoc, query, orderBy, onSnapshot, serverTimestamp, where } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+    import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBqdyx8Hd4zPvIe3dyQ-4N-4_iXJpcyoqo",
+      authDomain: "ame-soeur-1a85a.firebaseapp.com",
+      projectId: "ame-soeur-1a85a",
+      storageBucket: "ame-soeur-1a85a.firebasestorage.app",
+      messagingSenderId: "125367778338",
+      appId: "1:125367778338:web:032fb265e41e2fc7e29e7b",
+      measurementId: "G-BQ1N79TJ11"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const storage = getStorage(app);
+    let currentUser = null;
+    let currentChatUser = null;
+    let unsubscribeChat = null;
+
+    // ─── PAYS ───
+    const PAYS = ["Afghanistan","Afrique du Sud","Albanie","Algérie","Allemagne","Angola","Arabie Saoudite","Argentine","Arménie","Australie","Autriche","Azerbaïdjan","Bahreïn","Bangladesh","Belgique","Bénin","Birmanie","Bolivie","Bosnie-Herzégovine","Botswana","Brésil","Bulgarie","Burkina Faso","Burundi","Cambodge","Cameroun","Canada","Chili","Chine","Chypre","Colombie","Congo","Côte d'Ivoire","Croatie","Cuba","Danemark","Djibouti","Égypte","Émirats arabes unis","Équateur","Espagne","Estonie","Éthiopie","États-Unis","Finlande","France","Gabon","Gambie","Ghana","Grèce","Guatemala","Guinée","Haïti","Hongrie","Inde","Indonésie","Irak","Iran","Irlande","Islande","Israël","Italie","Jamaïque","Japon","Jordanie","Kazakhstan","Kenya","Koweït","Laos","Liban","Libye","Lituanie","Luxembourg","Madagascar","Malaisie","Mali","Maroc","Maurice","Mauritanie","Mexique","Moldova","Mongolie","Mozambique","Namibie","Népal","Nicaragua","Niger","Nigéria","Norvège","Nouvelle-Zélande","Oman","Ouganda","Pakistan","Panama","Paraguay","Pays-Bas","Pérou","Philippines","Pologne","Portugal","Qatar","République tchèque","Roumanie","Royaume-Uni","Russie","Rwanda","Sénégal","Serbie","Sierra Leone","Singapour","Slovaquie","Slovénie","Somalie","Soudan","Sri Lanka","Suède","Suisse","Syrie","Tanzanie","Tchad","Thaïlande","Togo","Tunisie","Turquie","Ukraine","Uruguay","Venezuela","Vietnam","Yémen","Zambie","Zimbabwe"];
+
+    const INTERETS = ["Voyages","Musique","Sport","Cuisine","Lecture","Cinéma","Danse","Art","Photographie","Nature","Yoga","Gaming","Méditation","Mode","Entrepreneuriat","Bénévolat","Randonnée","Plage","Famille","Spiritualité"];
+
+    function isTrialExpired(createdAt) {
+      if (!createdAt) return false;
+      const now = new Date();
+      const created = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+      return (now - created) / (1000*60*60*24) > 30;
+    }
+
+    function getDaysLeft(createdAt) {
+      if (!createdAt) return 30;
+      const now = new Date();
+      const created = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+      return Math.max(0, Math.ceil(30 - (now - created)/(1000*60*60*24)));
+    }
+
+    // ─── INIT PAYS SELECTS ───
+    function initPaysSelects() {
+      ['reg-pays','edit-pays'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        PAYS.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p; opt.textContent = p;
+          sel.appendChild(opt);
+        });
+      });
+    }
+
+    // ─── INIT INTERETS CHECKBOXES ───
+    function initInterets(containerId, selected=[]) {
+      const c = document.getElementById(containerId);
+      if (!c) return;
+      c.innerHTML = '';
+      INTERETS.forEach(i => {
+        const label = document.createElement('label');
+        label.className = 'interet-item';
+        label.innerHTML = `<input type="checkbox" value="${i}" ${selected.includes(i)?'checked':''}> ${i}`;
+        c.appendChild(label);
+      });
+    }
+
+    function getSelectedInterets(containerId) {
+      const c = document.getElementById(containerId);
+      if (!c) return [];
+      return [...c.querySelectorAll('input:checked')].map(i => i.value);
+    }
+
+    // ─── AUTH STATE ───
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        currentUser = user;
+        await checkMemberStatus(user.uid);
+      } else {
+        currentUser = null;
+      }
+    });
+
+    async function checkMemberStatus(uid) {
+      try {
+        const snap = await getDoc(doc(db, "membres", uid));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (!isTrialExpired(data.dateInscription) || data.abonnement === "actif") {
+            showDashboard(data, uid);
+          } else {
+            showPaymentRequired();
+          }
+        } else {
+          const u = auth.currentUser;
+          const newData = {
+            prenom: u.displayName || "Membre",
+            email: u.email, age: 0, genre: "", pays: "", ville: "", bio: "",
+            interets: [], photo: "",
+            dateInscription: serverTimestamp(),
+            abonnement: "essai", actif: true, likes: [], likedBy: []
+          };
+          await setDoc(doc(db, "membres", uid), newData);
+          showDashboard(newData, uid);
+        }
+      } catch(e) { console.error(e); }
+    }
+
+    // ─── INSCRIPTION ───
+    window.inscrire = async function() {
+      const prenom = document.getElementById('reg-prenom').value.trim();
+      const age = parseInt(document.getElementById('reg-age').value);
+      const email = document.getElementById('reg-email').value.trim();
+      const password = document.getElementById('reg-password').value;
+      const genre = document.getElementById('reg-genre').value;
+      const pays = document.getElementById('reg-pays').value;
+      const ville = document.getElementById('reg-ville').value.trim();
+      const bio = document.getElementById('reg-bio').value.trim();
+      const interets = getSelectedInterets('reg-interets');
+      const btn = document.getElementById('btn-inscrire');
+
+      if (!prenom||!age||!email||!password||!genre||!pays) { showAlert('Remplissez tous les champs obligatoires !','error'); return; }
+      if (age < 18) { showAlert('Vous devez avoir au moins 18 ans !','error'); return; }
+
+      btn.textContent = '⏳ Inscription...'; btn.disabled = true;
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(cred.user, { displayName: prenom });
+        await setDoc(doc(db, "membres", cred.user.uid), {
+          prenom, age, email, genre, pays, ville, bio, interets,
+          photo: "", dateInscription: serverTimestamp(),
+          abonnement: "essai", actif: true, likes: [], likedBy: []
+        });
+        closeModal();
+        showAlert('🎉 Bienvenue '+prenom+' ! 1 mois d\'accès gratuit !','success');
+      } catch(e) {
+        let msg = "Erreur inscription";
+        if (e.code==='auth/email-already-in-use') msg = "Email déjà utilisé !";
+        if (e.code==='auth/weak-password') msg = "Mot de passe trop court (min 6)";
+        showAlert(msg,'error');
+      }
+      btn.textContent = '✨ Créer mon profil gratuit'; btn.disabled = false;
+    };
+
+    // ─── CONNEXION ───
+    window.connecter = async function() {
+      const email = document.getElementById('login-email').value.trim();
+      const pw = document.getElementById('login-password').value;
+      const btn = document.getElementById('btn-connecter');
+      if (!email||!pw) { showAlert('Remplissez tous les champs !','error'); return; }
+      btn.textContent='⏳ Connexion...'; btn.disabled=true;
+      try {
+        await signInWithEmailAndPassword(auth, email, pw);
+        closeLoginModal();
+      } catch(e) { showAlert('Email ou mot de passe incorrect','error'); }
+      btn.textContent='Se connecter'; btn.disabled=false;
+    };
+
+    // ─── DECONNEXION ───
+    window.deconnecter = async function() {
+      if (unsubscribeChat) unsubscribeChat();
+      await signOut(auth);
+      ['dashboard','payment-required','chat-section'].forEach(id => document.getElementById(id).style.display='none');
+      document.getElementById('main-content').style.display='block';
+    };
+
+    // ─── UPLOAD PHOTO PROFIL ───
+    window.uploadPhoto = async function(event) {
+      const file = event.target.files[0];
+      if (!file||!currentUser) return;
+      showAlert('📸 Upload en cours...','success');
+      try {
+        const r = ref(storage, 'photos/'+currentUser.uid+'/profile.jpg');
+        await uploadBytes(r, file);
+        const url = await getDownloadURL(r);
+        await updateDoc(doc(db,'membres',currentUser.uid), {photo: url});
+        const av = document.getElementById('dash-avatar');
+        av.style.backgroundImage='url('+url+')';
+        av.style.backgroundSize='cover';
+        av.style.backgroundPosition='center';
+        av.innerHTML='';
+        showAlert('✅ Photo mise à jour !','success');
+      } catch(e) { showAlert('Erreur upload','error'); }
+    };
+
+    // ─── SAUVEGARDER PROFIL ───
+    window.sauvegarderProfil = async function() {
+      if (!currentUser) return;
+      const ville = document.getElementById('edit-ville').value.trim();
+      const pays = document.getElementById('edit-pays').value;
+      const bio = document.getElementById('edit-bio').value.trim();
+      const interets = getSelectedInterets('edit-interets');
+      try {
+        await updateDoc(doc(db,'membres',currentUser.uid), {ville,pays,bio,interets});
+        document.getElementById('edit-section').style.display='none';
+        showAlert('✅ Profil mis à jour !','success');
+        document.getElementById('dash-ville').textContent = ville||'-';
+        document.getElementById('dash-pays').textContent = pays||'-';
+        document.getElementById('dash-bio').textContent = bio||'Pas encore de bio...';
+        renderInterets(interets, 'dash-interets-list');
+      } catch(e) { showAlert('Erreur sauvegarde','error'); }
+    };
+
+    function renderInterets(list, containerId) {
+      const c = document.getElementById(containerId);
+      if (!c) return;
+      c.innerHTML = list.map(i=>`<span class="interest-tag">${i}</span>`).join('');
+    }
+
+    // ─── LIKE / MATCH ───
+    window.likerMembre = async function(uid) {
+      if (!currentUser) return;
+      const myRef = doc(db,'membres',currentUser.uid);
+      const theirRef = doc(db,'membres',uid);
+      const mySnap = await getDoc(myRef);
+      const theirSnap = await getDoc(theirRef);
+      if (!mySnap.exists()||!theirSnap.exists()) return;
+      const myData = mySnap.data();
+      const theirData = theirSnap.data();
+      const myLikes = myData.likes||[];
+      const theirLikedBy = theirData.likedBy||[];
+      if (!myLikes.includes(uid)) {
+        await updateDoc(myRef, {likes: [...myLikes, uid]});
+        await updateDoc(theirRef, {likedBy: [...theirLikedBy, currentUser.uid]});
+        const theirLikes = theirData.likes||[];
+        if (theirLikes.includes(currentUser.uid)) {
+          showAlert('💕 C\'est un MATCH ! Vous pouvez vous écrire !','success');
+          document.getElementById('btn-chat-'+uid).style.display='inline-flex';
+        } else {
+          showAlert('❤️ Vous avez liké ce profil !','success');
+        }
+      }
+    };
+
+    // ─── CHAT ───
+    function getChatId(uid1, uid2) {
+      return [uid1,uid2].sort().join('_');
+    }
+
+    window.ouvrirChat = async function(uid, prenom, photo) {
+      if (!currentUser) return;
+      currentChatUser = {uid, prenom, photo};
+      document.getElementById('chat-nom').textContent = prenom;
+      document.getElementById('chat-avatar').innerHTML = photo
+        ? `<img src="${photo}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">`
+        : `<div style="width:36px;height:36px;border-radius:50%;background:var(--rose);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${prenom.charAt(0)}</div>`;
+      document.getElementById('chat-section').style.display='flex';
+      document.getElementById('dashboard').style.display='none';
+      loadMessages(getChatId(currentUser.uid, uid));
+    };
+
+    function loadMessages(chatId) {
+      if (unsubscribeChat) unsubscribeChat();
+      const messagesRef = collection(db,'chats',chatId,'messages');
+      const q = query(messagesRef, orderBy('createdAt','asc'));
+      unsubscribeChat = onSnapshot(q, (snap) => {
+        const container = document.getElementById('messages-container');
+        container.innerHTML = '';
+        snap.forEach(d => {
+          const msg = d.data();
+          const isMine = msg.senderId === currentUser.uid;
+          const div = document.createElement('div');
+          div.className = 'message ' + (isMine ? 'message-mine' : 'message-theirs');
+          div.innerHTML = `<div class="msg-bubble">${msg.text}</div>
+            <div class="msg-time">${msg.createdAt ? new Date(msg.createdAt.toDate()).toLocaleTimeString('fr',{hour:'2-digit',minute:'2-digit'}) : ''}</div>`;
+          container.appendChild(div);
+        });
+        container.scrollTop = container.scrollHeight;
+      });
+    }
+
+    window.envoyerMessage = async function() {
+      if (!currentUser||!currentChatUser) return;
+      const input = document.getElementById('message-input');
+      const text = input.value.trim();
+      if (!text) return;
+      const chatId = getChatId(currentUser.uid, currentChatUser.uid);
+      input.value = '';
+      try {
+        await addDoc(collection(db,'chats',chatId,'messages'), {
+          text, senderId: currentUser.uid,
+          senderName: currentUser.displayName,
+          createdAt: serverTimestamp()
+        });
+        await setDoc(doc(db,'chats',chatId), {
+          participants: [currentUser.uid, currentChatUser.uid],
+          lastMessage: text, lastUpdated: serverTimestamp()
+        });
+      } catch(e) { console.error(e); }
+    };
+
+    window.fermerChat = function() {
+      if (unsubscribeChat) unsubscribeChat();
+      document.getElementById('chat-section').style.display='none';
+      document.getElementById('dashboard').style.display='block';
+    };
+
+    // ─── ENTER pour envoyer ───
+    window.chatKeydown = function(e) {
+      if (e.key==='Enter'&&!e.shiftKey) { e.preventDefault(); envoyerMessage(); }
+    };
+
+    // ─── CHARGER MEMBRES ───
+    async function chargerMembres() {
+      const snap = await getDocs(collection(db,'membres'));
+      const container = document.getElementById('membres-grid');
+      if (!container) return;
+      container.innerHTML = '';
+      const mySnap = await getDoc(doc(db,'membres',currentUser.uid));
+      const myData = mySnap.exists() ? mySnap.data() : {};
+      const myLikes = myData.likes||[];
+      snap.forEach(d => {
+        if (d.id === currentUser.uid) return;
+        const m = d.data();
+        const isLiked = myLikes.includes(d.id);
+        const isMatch = (m.likes||[]).includes(currentUser.uid) && isLiked;
+        const card = document.createElement('div');
+        card.className = 'membre-card';
+        card.innerHTML = `
+          <div class="mc-photo" onclick="voirProfil('${d.id}')" style="${m.photo?'background-image:url('+m.photo+');background-size:cover;background-position:center;':''}">${m.photo?'':'<span style="font-size:2.5rem;">👤</span>'}</div>
+          <div class="mc-body">
+            <div class="mc-name">${m.prenom||'Membre'}, ${m.age||'?'} ans</div>
+            <div class="mc-info">📍 ${m.ville||m.pays||'Inconnu'}</div>
+            ${m.bio?`<div class="mc-bio">${m.bio.substring(0,80)}${m.bio.length>80?'...':''}</div>`:''}
+            <div class="mc-tags">${(m.interets||[]).slice(0,3).map(i=>`<span class="mc-tag">${i}</span>`).join('')}</div>
+            <div class="mc-actions">
+              <button class="btn-like-mc ${isLiked?'liked':''}" onclick="likerMembre('${d.id}')">${isLiked?'❤️ Liké':'🤍 Liker'}</button>
+              <button class="btn-chat-mc" id="btn-chat-${d.id}" style="display:${isMatch?'inline-flex':'none'}" onclick="ouvrirChat('${d.id}','${m.prenom||'Membre'}','${m.photo||''}')">💬 Chat</button>
+              <button class="btn-voir-mc" onclick="voirProfil('${d.id}')">👁️ Voir</button>
+            </div>
+          </div>`;
+        container.appendChild(card);
+      });
+      if (container.children.length === 0) {
+        container.innerHTML = '<div style="text-align:center;padding:2rem;color:#997080;">Aucun autre membre pour l\'instant. Invitez vos amis ! 😊</div>';
+      }
+    }
+
+    // ─── VOIR PROFIL ───
+    window.voirProfil = async function(uid) {
+      const snap = await getDoc(doc(db,'membres',uid));
+      if (!snap.exists()) return;
+      const m = snap.data();
+      const mySnap = await getDoc(doc(db,'membres',currentUser.uid));
+      const myData = mySnap.data();
+      const isLiked = (myData.likes||[]).includes(uid);
+      const isMatch = (m.likes||[]).includes(currentUser.uid) && isLiked;
+      document.getElementById('profil-photo').style.backgroundImage = m.photo?'url('+m.photo+')':'none';
+      document.getElementById('profil-photo').innerHTML = m.photo?'':'<span style="font-size:4rem;">👤</span>';
+      document.getElementById('profil-nom').textContent = (m.prenom||'Membre')+', '+(m.age||'?')+' ans';
+      document.getElementById('profil-localisation').textContent = '📍 '+(m.ville?m.ville+', ':'')+(m.pays||'');
+      document.getElementById('profil-genre').textContent = m.genre||'-';
+      document.getElementById('profil-bio').textContent = m.bio||'Pas de bio.';
+      document.getElementById('profil-interets').innerHTML = (m.interets||[]).map(i=>`<span class="interest-tag">${i}</span>`).join('');
+      document.getElementById('profil-like-btn').textContent = isLiked?'❤️ Liké':'🤍 Liker';
+      document.getElementById('profil-like-btn').onclick = () => likerMembre(uid);
+      document.getElementById('profil-chat-btn').style.display = isMatch?'inline-flex':'none';
+      document.getElementById('profil-chat-btn').onclick = () => { fermerModal('profil-modal'); ouvrirChat(uid, m.prenom||'Membre', m.photo||''); };
+      document.getElementById('profil-modal').classList.add('open');
+    };
+
+    window.fermerModal = function(id) { document.getElementById(id).classList.remove('open'); };
+
+    // ─── DASHBOARD ───
+    function showDashboard(data, uid) {
+      document.getElementById('main-content').style.display='none';
+      document.getElementById('payment-required').style.display='none';
+      document.getElementById('chat-section').style.display='none';
+      document.getElementById('dashboard').style.display='block';
+      document.getElementById('dash-prenom').textContent = data.prenom||'Membre';
+      document.getElementById('dash-email').textContent = data.email||'';
+      document.getElementById('dash-age').textContent = data.age||'-';
+      document.getElementById('dash-genre').textContent = data.genre||'-';
+      document.getElementById('dash-pays').textContent = data.pays||'-';
+      document.getElementById('dash-ville').textContent = data.ville||'-';
+      document.getElementById('dash-bio').textContent = data.bio||'Pas encore de bio...';
+      renderInterets(data.interets||[], 'dash-interets-list');
+      const days = getDaysLeft(data.dateInscription);
+      document.getElementById('dash-statut').textContent = data.abonnement==='actif'?'✅ Abonné Premium':'🎁 Essai gratuit — '+days+' jour(s) restant(s)';
+      if (data.photo) {
+        const av = document.getElementById('dash-avatar');
+        av.style.backgroundImage='url('+data.photo+')';
+        av.style.backgroundSize='cover';
+        av.style.backgroundPosition='center';
+        av.innerHTML='';
+      } else {
+        document.getElementById('dash-avatar').innerHTML = (data.prenom||'M').charAt(0).toUpperCase();
+      }
+      initPaysSelects();
+      initInterets('edit-interets', data.interets||[]);
+      document.getElementById('edit-ville').value = data.ville||'';
+      chargerMembres();
+    }
+
+    function showPaymentRequired() {
+      document.getElementById('main-content').style.display='none';
+      document.getElementById('dashboard').style.display='none';
+      document.getElementById('payment-required').style.display='block';
+    }
+
+    function showAlert(msg, type) {
+      const a = document.getElementById('alert-box');
+      a.textContent=msg; a.className='alert-box '+type;
+      a.style.display='block';
+      setTimeout(()=>a.style.display='none',4000);
+    }
+
+    window.openModal = function() { initPaysSelects(); initInterets('reg-interets'); document.getElementById('modal').classList.add('open'); }
+    window.closeModal = function() { document.getElementById('modal').classList.remove('open'); }
+    window.openLoginModal = function() { document.getElementById('login-modal').classList.add('open'); }
+    window.closeLoginModal = function() { document.getElementById('login-modal').classList.remove('open'); }
+    window.closeModalOutside = function(e) { if(e.target.id==='modal')closeModal(); if(e.target.id==='login-modal')closeLoginModal(); if(e.target.id==='profil-modal')fermerModal('profil-modal'); }
+    window.toggleEditSection = function() {
+      const s = document.getElementById('edit-section');
+      s.style.display = s.style.display==='none'?'block':'none';
+      if (s.style.display==='block') initInterets('edit-interets', getSelectedInterets('edit-interets'));
+    }
+    window.switchTab = function(tab) {
+      document.querySelectorAll('.dash-tab').forEach(t=>t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t=>t.style.display='none');
+      document.querySelector('.dash-tab[data-tab="'+tab+'"]').classList.add('active');
+      document.getElementById('tab-'+tab).style.display='block';
+      if (tab==='membres') chargerMembres();
+    }
+  </script>
+
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    :root{--rose:#E8624A;--rose-lt:#F5A28C;--blush:#FDE8DF;--cream:#FFF8F4;--mauve:#7C4B6E;--dark:#2A1A22;--text:#4A3040;--gold:#D4A853;--green:#27ae60;}
+    body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--text);overflow-x:hidden;}
+
+    .alert-box{position:fixed;top:76px;left:50%;transform:translateX(-50%);padding:.8rem 2rem;border-radius:50px;font-size:.88rem;font-weight:500;z-index:9999;display:none;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.2);}
+    .alert-box.success{background:var(--green);color:#fff;}
+    .alert-box.error{background:var(--rose);color:#fff;}
+
+    nav{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:1rem 5vw;background:rgba(255,248,244,.97);border-bottom:1px solid rgba(232,98,74,.12);backdrop-filter:blur(14px);}
+    .logo{font-family:'Playfair Display',serif;font-size:1.5rem;color:var(--rose);}
+    .logo span{color:var(--mauve);font-style:italic;}
+    .nav-btns{display:flex;gap:.7rem;}
+    .btn-nav-login{border:1.5px solid var(--rose);color:var(--rose);padding:.5rem 1.1rem;border-radius:50px;font-size:.82rem;background:transparent;cursor:pointer;font-family:'DM Sans',sans-serif;}
+    .btn-nav-signup{background:var(--rose);color:#fff;padding:.5rem 1.1rem;border-radius:50px;font-size:.82rem;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;}
+
+    /* HERO */
+    .hero{min-height:100vh;padding:7rem 5vw 4rem;display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:2rem;position:relative;overflow:hidden;}
+    .hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 60% at 80% 30%,rgba(232,98,74,.07),transparent);}
+    .hero-badge{display:inline-flex;align-items:center;gap:.5rem;background:var(--blush);color:var(--rose);font-size:.76rem;font-weight:500;padding:.4rem 1rem;border-radius:50px;margin-bottom:1.2rem;border:1px solid rgba(232,98,74,.2);}
+    .dot{width:7px;height:7px;background:var(--rose);border-radius:50%;animation:pulse 1.5s infinite;}
+    @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.4);opacity:.6}}
+    .hero h1{font-family:'Playfair Display',serif;font-size:clamp(2rem,4vw,3.6rem);line-height:1.12;color:var(--dark);margin-bottom:1.2rem;}
+    .hero h1 em{color:var(--rose);font-style:italic;}
+    .hero-sub{font-size:.92rem;line-height:1.75;color:var(--text);max-width:440px;margin-bottom:1.8rem;}
+    .hero-actions{display:flex;gap:.8rem;flex-wrap:wrap;margin-bottom:2rem;}
+    .btn-primary{background:linear-gradient(135deg,var(--rose),var(--mauve));color:#fff;padding:.82rem 1.8rem;border-radius:50px;font-size:.92rem;font-weight:500;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;box-shadow:0 8px 24px rgba(232,98,74,.3);transition:transform .2s;display:inline-flex;align-items:center;gap:.4rem;text-decoration:none;}
+    .btn-primary:hover{transform:translateY(-2px);}
+    .btn-ghost{border:1.5px solid var(--rose);color:var(--rose);padding:.82rem 1.6rem;border-radius:50px;font-size:.92rem;background:transparent;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;}
+    .hero-stats{display:flex;gap:2rem;}
+    .stat strong{display:block;font-family:'Playfair Display',serif;font-size:1.5rem;color:var(--rose);}
+    .stat span{font-size:.76rem;color:#997080;}
+
+    /* PROFILES GRID */
+    .profiles-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;position:relative;z-index:2;}
+    .profile-mini{background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 6px 20px rgba(42,26,34,.09);transition:transform .2s;}
+    .profile-mini:hover{transform:translateY(-3px);}
+    .profile-mini:nth-child(2){margin-top:1.5rem;}
+    .profile-mini:nth-child(4){margin-top:1.5rem;}
+    .pm-img{height:130px;display:flex;align-items:center;justify-content:center;font-size:3.5rem;overflow:hidden;background:linear-gradient(135deg,var(--blush),var(--rose-lt));}
+    .pm-img img{width:100%;height:100%;object-fit:cover;}
+    .pm-body{padding:.7rem;}
+    .pm-name{font-family:'Playfair Display',serif;font-size:.9rem;color:var(--dark);}
+    .pm-info{font-size:.68rem;color:#997080;margin-bottom:.4rem;}
+    .pm-tags{display:flex;gap:.3rem;flex-wrap:wrap;}
+    .pm-tag{background:var(--blush);color:var(--rose);font-size:.62rem;padding:.15rem .5rem;border-radius:50px;}
+
+    /* SECTIONS */
+    .section{padding:4rem 5vw;}
+    .section-label{font-size:.72rem;letter-spacing:2px;text-transform:uppercase;color:var(--rose);margin-bottom:.4rem;font-weight:500;}
+    .section-title{font-family:'Playfair Display',serif;font-size:clamp(1.5rem,2.8vw,2.4rem);color:var(--dark);margin-bottom:.6rem;}
+    .section-sub{color:#997080;font-size:.86rem;line-height:1.7;margin-bottom:1.8rem;max-width:480px;}
+    .features-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}
+    .feature-card{background:#fff;border-radius:16px;padding:1.5rem;border:1px solid rgba(232,98,74,.1);transition:transform .2s,box-shadow .2s;}
+    .feature-card:hover{transform:translateY(-4px);box-shadow:0 12px 30px rgba(42,26,34,.09);}
+    .feature-icon{font-size:1.7rem;margin-bottom:.6rem;}
+    .feature-title{font-family:'Playfair Display',serif;font-size:.95rem;color:var(--dark);margin-bottom:.3rem;}
+    .feature-desc{font-size:.78rem;line-height:1.6;color:#997080;}
+
+    .trial-section{background:linear-gradient(135deg,var(--dark),var(--mauve));padding:4rem 5vw;text-align:center;color:#fff;}
+    .trial-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;max-width:650px;margin:0 auto 2rem;}
+    .trial-step .trial-num{width:44px;height:44px;border-radius:50%;background:var(--rose);color:#fff;font-family:'Playfair Display',serif;font-size:1.1rem;display:flex;align-items:center;justify-content:center;margin:0 auto .6rem;}
+    .trial-step h3{font-size:.88rem;margin-bottom:.2rem;}
+    .trial-step p{font-size:.74rem;color:rgba(255,255,255,.6);line-height:1.4;}
+    .btn-white{background:#fff;color:var(--rose);padding:.85rem 2rem;border-radius:50px;font-weight:500;font-size:.9rem;cursor:pointer;border:none;font-family:'DM Sans',sans-serif;box-shadow:0 8px 20px rgba(0,0,0,.15);transition:transform .2s;}
+    .btn-white:hover{transform:translateY(-2px);}
+
+    .testi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;}
+    .testi{background:#fff;border-radius:16px;padding:1.4rem;border:1px solid rgba(232,98,74,.1);}
+    .stars{color:var(--gold);font-size:.85rem;margin-bottom:.6rem;}
+    .testi-text{font-size:.82rem;line-height:1.65;color:var(--text);margin-bottom:.9rem;font-style:italic;}
+    .testi-author{display:flex;align-items:center;gap:.6rem;}
+    .testi-av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1rem;background:linear-gradient(135deg,var(--blush),var(--rose-lt));}
+    .testi-name{font-weight:500;font-size:.82rem;color:var(--dark);}
+    .testi-sub{font-size:.7rem;color:#997080;}
+
+    .cta-section{background:linear-gradient(135deg,var(--rose),var(--mauve));text-align:center;padding:4rem 5vw;}
+    .cta-section h2{font-family:'Playfair Display',serif;font-size:clamp(1.5rem,3vw,2.6rem);color:#fff;margin-bottom:.7rem;}
+    .cta-section p{color:rgba(255,255,255,.8);max-width:440px;margin:0 auto 1.8rem;font-size:.88rem;line-height:1.7;}
+
+    footer{background:var(--dark);color:rgba(255,255,255,.6);padding:2.5rem 5vw;display:grid;grid-template-columns:2fr 1fr 1fr;gap:2rem;}
+    .footer-logo{font-family:'Playfair Display',serif;font-size:1.3rem;color:var(--rose);margin-bottom:.5rem;display:block;}
+    .footer-logo span{color:var(--mauve);font-style:italic;}
+    footer p{font-size:.8rem;line-height:1.6;}
+    footer h4{font-family:'Playfair Display',serif;color:#fff;margin-bottom:.6rem;font-size:.88rem;}
+    footer ul{list-style:none;}
+    footer ul li{margin-bottom:.35rem;}
+    footer ul a{color:rgba(255,255,255,.5);text-decoration:none;font-size:.8rem;}
+    .footer-bottom{background:var(--dark);border-top:1px solid rgba(255,255,255,.07);text-align:center;padding:.8rem 5vw;font-size:.72rem;color:rgba(255,255,255,.3);}
+
+    /* ─── DASHBOARD ─── */
+    #dashboard{display:none;min-height:100vh;padding:5rem 0 3rem;background:var(--cream);}
+    .dash-wrapper{max-width:900px;margin:0 auto;padding:0 4vw;}
+
+    .dash-header{background:linear-gradient(135deg,var(--dark),var(--mauve));border-radius:20px;padding:1.8rem;color:#fff;display:flex;align-items:center;gap:1.2rem;margin-bottom:1.2rem;}
+    .dash-avatar{width:75px;height:75px;border-radius:50%;background:linear-gradient(135deg,var(--rose),var(--mauve));display:flex;align-items:center;justify-content:center;font-size:1.8rem;font-weight:700;color:#fff;border:3px solid rgba(255,255,255,.3);flex-shrink:0;cursor:pointer;background-size:cover;background-position:center;position:relative;overflow:hidden;}
+    .dash-avatar:hover::after{content:'📷';position:absolute;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:1.3rem;border-radius:50%;}
+    .photo-input{display:none;}
+    .dash-info h2{font-family:'Playfair Display',serif;font-size:1.3rem;margin-bottom:.2rem;}
+    .dash-info p{font-size:.78rem;color:rgba(255,255,255,.65);}
+    .dash-statut{display:inline-block;margin-top:.4rem;font-size:.74rem;font-weight:600;background:rgba(255,255,255,.15);padding:.25rem .8rem;border-radius:50px;}
+
+    /* TABS */
+    .dash-tabs{display:flex;gap:.5rem;margin-bottom:1.2rem;overflow-x:auto;padding-bottom:.3rem;}
+    .dash-tab{padding:.6rem 1.2rem;border-radius:50px;font-size:.82rem;font-weight:500;cursor:pointer;border:1.5px solid rgba(232,98,74,.2);background:transparent;color:var(--text);white-space:nowrap;font-family:'DM Sans',sans-serif;transition:all .2s;}
+    .dash-tab.active{background:var(--rose);color:#fff;border-color:var(--rose);}
+    .tab-content{display:none;}
+    .tab-content.active-tab{display:block;}
+
+    /* PROFIL TAB */
+    .profil-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
+    .info-card{background:#fff;border-radius:16px;padding:1.3rem;border:1px solid rgba(232,98,74,.1);}
+    .info-card h3{font-family:'Playfair Display',serif;font-size:.95rem;color:var(--dark);margin-bottom:.9rem;display:flex;align-items:center;gap:.4rem;}
+    .info-row{display:flex;justify-content:space-between;padding:.45rem 0;border-bottom:1px solid #f5ece8;font-size:.8rem;}
+    .info-row:last-child{border-bottom:none;}
+    .info-row span{color:#997080;}
+    .info-row strong{color:var(--dark);}
+    .bio-text{font-size:.8rem;color:#997080;line-height:1.6;font-style:italic;}
+    .interest-tag{display:inline-block;background:var(--blush);color:var(--rose);font-size:.7rem;padding:.2rem .6rem;border-radius:50px;margin:.2rem;}
+
+    .edit-section{display:none;background:#fff;border-radius:16px;padding:1.3rem;border:1px solid rgba(232,98,74,.1);margin-top:1rem;}
+    .edit-section h3{font-family:'Playfair Display',serif;font-size:.95rem;color:var(--dark);margin-bottom:1rem;}
+    .form-group{margin-bottom:.8rem;}
+    .form-group label{display:block;font-size:.76rem;font-weight:500;color:var(--text);margin-bottom:.3rem;}
+    .form-group input,.form-group select,.form-group textarea{width:100%;padding:.65rem .9rem;border:1.5px solid rgba(232,98,74,.2);border-radius:10px;font-size:.85rem;font-family:'DM Sans',sans-serif;background:#fff;color:var(--dark);outline:none;}
+    .form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--rose);}
+    .form-group textarea{resize:vertical;min-height:70px;}
+    .interets-grid{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.3rem;}
+    .interet-item{display:flex;align-items:center;gap:.3rem;background:var(--blush);padding:.3rem .7rem;border-radius:50px;cursor:pointer;font-size:.76rem;transition:background .2s;}
+    .interet-item:hover{background:#f5c4b0;}
+    .interet-item input{accent-color:var(--rose);}
+
+    /* MEMBRES TAB */
+    .membres-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1rem;}
+    .membre-card{background:#fff;border-radius:16px;overflow:hidden;border:1px solid rgba(232,98,74,.1);transition:transform .2s,box-shadow .2s;}
+    .membre-card:hover{transform:translateY(-4px);box-shadow:0 12px 30px rgba(42,26,34,.1);}
+    .mc-photo{height:160px;background:linear-gradient(135deg,var(--blush),var(--rose-lt));display:flex;align-items:center;justify-content:center;cursor:pointer;background-size:cover;background-position:center;}
+    .mc-body{padding:.9rem;}
+    .mc-name{font-family:'Playfair Display',serif;font-size:.95rem;color:var(--dark);margin-bottom:.2rem;}
+    .mc-info{font-size:.72rem;color:#997080;margin-bottom:.4rem;}
+    .mc-bio{font-size:.74rem;color:#997080;margin-bottom:.5rem;line-height:1.4;}
+    .mc-tags{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.7rem;}
+    .mc-tag{background:var(--blush);color:var(--rose);font-size:.62rem;padding:.15rem .5rem;border-radius:50px;}
+    .mc-actions{display:flex;gap:.4rem;flex-wrap:wrap;}
+    .btn-like-mc{padding:.4rem .9rem;border-radius:50px;font-size:.74rem;border:1.5px solid rgba(232,98,74,.3);color:var(--rose);background:transparent;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;}
+    .btn-like-mc.liked{background:var(--rose);color:#fff;border-color:var(--rose);}
+    .btn-chat-mc{padding:.4rem .9rem;border-radius:50px;font-size:.74rem;background:linear-gradient(135deg,var(--rose),var(--mauve));color:#fff;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:.3rem;}
+    .btn-voir-mc{padding:.4rem .9rem;border-radius:50px;font-size:.74rem;background:var(--blush);color:var(--rose);border:none;cursor:pointer;font-family:'DM Sans',sans-serif;}
+
+    /* STATS */
+    .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem;margin-bottom:1.2rem;}
+    .stat-mini{background:#fff;border-radius:14px;padding:1rem;text-align:center;border:1px solid rgba(232,98,74,.1);}
+    .stat-mini .num{font-family:'Playfair Display',serif;font-size:1.6rem;color:var(--rose);}
+    .stat-mini .lbl{font-size:.7rem;color:#997080;}
+
+    /* ACTIONS */
+    .dash-action-btns{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1rem;}
+    .btn-action{padding:.6rem 1.3rem;border-radius:50px;font-size:.8rem;font-weight:500;cursor:pointer;font-family:'DM Sans',sans-serif;transition:transform .15s;display:inline-flex;align-items:center;gap:.3rem;border:none;}
+    .btn-action:hover{transform:translateY(-2px);}
+    .btn-action-rose{background:linear-gradient(135deg,var(--rose),var(--mauve));color:#fff;}
+    .btn-action-gold{background:linear-gradient(135deg,var(--gold),#e8a030);color:var(--dark);}
+    .btn-action-outline{background:transparent;border:1.5px solid var(--rose)!important;color:var(--rose);}
+
+    /* ─── CHAT ─── */
+    #chat-section{display:none;flex-direction:column;height:100vh;padding-top:64px;background:var(--cream);}
+    .chat-header{background:#fff;padding:1rem 1.5rem;display:flex;align-items:center;gap:.8rem;border-bottom:1px solid rgba(232,98,74,.1);box-shadow:0 2px 8px rgba(42,26,34,.06);}
+    .chat-back{background:var(--blush);border:none;color:var(--rose);padding:.4rem .9rem;border-radius:50px;cursor:pointer;font-size:.8rem;font-family:'DM Sans',sans-serif;}
+    .chat-user-info h3{font-family:'Playfair Display',serif;font-size:1rem;color:var(--dark);}
+    .chat-user-info p{font-size:.72rem;color:#27ae60;}
+    #messages-container{flex:1;overflow-y:auto;padding:1rem 1.5rem;display:flex;flex-direction:column;gap:.6rem;}
+    .message{display:flex;flex-direction:column;max-width:75%;}
+    .message-mine{align-self:flex-end;align-items:flex-end;}
+    .message-theirs{align-self:flex-start;align-items:flex-start;}
+    .msg-bubble{padding:.7rem 1rem;border-radius:18px;font-size:.86rem;line-height:1.5;word-break:break-word;}
+    .message-mine .msg-bubble{background:linear-gradient(135deg,var(--rose),var(--mauve));color:#fff;border-bottom-right-radius:4px;}
+    .message-theirs .msg-bubble{background:#fff;color:var(--dark);border:1px solid rgba(232,98,74,.12);border-bottom-left-radius:4px;}
+    .msg-time{font-size:.66rem;color:#b09898;margin-top:.2rem;}
+    .chat-input-area{background:#fff;padding:.8rem 1.2rem;display:flex;gap:.8rem;align-items:center;border-top:1px solid rgba(232,98,74,.1);}
+    .chat-input-area textarea{flex:1;border:1.5px solid rgba(232,98,74,.2);border-radius:22px;padding:.65rem 1rem;font-size:.88rem;font-family:'DM Sans',sans-serif;outline:none;resize:none;min-height:42px;max-height:100px;}
+    .chat-input-area textarea:focus{border-color:var(--rose);}
+    .btn-send{background:linear-gradient(135deg,var(--rose),var(--mauve));color:#fff;border:none;width:42px;height:42px;border-radius:50%;cursor:pointer;font-size:1.1rem;flex-shrink:0;}
+
+    /* PAYMENT */
+    #payment-required{display:none;min-height:100vh;padding:7rem 5vw 4rem;text-align:center;}
+    .pay-card{background:#fff;border-radius:20px;padding:2.2rem;max-width:480px;margin:0 auto;border:1.5px solid rgba(232,98,74,.2);}
+    .pay-card h2{font-family:'Playfair Display',serif;font-size:1.7rem;color:var(--dark);margin-bottom:.7rem;}
+    .pay-card p{font-size:.85rem;color:#997080;line-height:1.7;margin-bottom:1.3rem;}
+    .usdt-box{background:#f0faf7;border:1.5px solid rgba(38,161,123,.3);border-radius:12px;padding:1rem;margin-bottom:1rem;}
+    .usdt-addr{font-family:monospace;font-size:.76rem;word-break:break-all;color:#1a4a3c;background:#fff;padding:.5rem .7rem;border-radius:8px;margin:.4rem 0;}
+    .btn-copy{background:#26A17B;color:#fff;border:none;padding:.45rem 1rem;border-radius:8px;cursor:pointer;font-size:.74rem;font-family:'DM Sans',sans-serif;}
+
+    /* MODAL PROFIL */
+    .modal-overlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(42,26,34,.65);backdrop-filter:blur(6px);align-items:center;justify-content:center;}
+    .modal-overlay.open{display:flex;}
+    .modal{background:var(--cream);border-radius:24px;padding:2rem;width:92%;max-width:480px;position:relative;animation:modalIn .3s ease;max-height:92vh;overflow-y:auto;}
+    @keyframes modalIn{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+    .modal-close{position:absolute;top:.8rem;right:.8rem;background:var(--blush);border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:.8rem;color:var(--rose);}
+    .modal h2{font-family:'Playfair Display',serif;font-size:1.5rem;color:var(--dark);margin-bottom:.3rem;}
+    .modal>p{font-size:.82rem;color:#997080;margin-bottom:1.2rem;}
+    .form-row{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;}
+    .btn-submit{width:100%;background:linear-gradient(135deg,var(--rose),var(--mauve));color:#fff;border:none;cursor:pointer;padding:.88rem;border-radius:50px;font-size:.92rem;font-weight:500;font-family:'DM Sans',sans-serif;margin-top:.4rem;box-shadow:0 8px 20px rgba(232,98,74,.3);transition:transform .2s;}
+    .btn-submit:hover{transform:translateY(-2px);}
+    .modal-footer{text-align:center;font-size:.76rem;color:#997080;margin-top:.8rem;}
+    .modal-footer a{color:var(--rose);cursor:pointer;}
+
+    /* PROFIL MODAL */
+    #profil-modal .modal{max-width:420px;}
+    .profil-photo-big{width:100%;height:200px;background:linear-gradient(135deg,var(--blush),var(--rose-lt));border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:4rem;margin-bottom:1rem;background-size:cover;background-position:center;overflow:hidden;}
+    .profil-actions{display:flex;gap:.7rem;margin-top:1rem;flex-wrap:wrap;}
+
+    @media(max-width:768px){
+      .hero{grid-template-columns:1fr;padding-top:5.5rem;}
+      .profiles-grid{grid-template-columns:1fr 1fr;}
+      footer{grid-template-columns:1fr;}
+      .profil-grid{grid-template-columns:1fr;}
+      .stats-row{grid-template-columns:repeat(3,1fr);}
+    }
+  </style>
+</head>
+<body>
+
+<div class="alert-box" id="alert-box"></div>
+
+<nav>
+  <div class="logo">Âme<span>Sœur</span></div>
+  <div class="nav-btns">
+    <button class="btn-nav-login" onclick="openLoginModal()">Se connecter</button>
+    <button class="btn-nav-signup" onclick="openModal()">S'inscrire</button>
+  </div>
+</nav>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div id="main-content">
+  <section class="hero">
+    <div style="position:relative;z-index:2;">
+      <div class="hero-badge"><div class="dot"></div>1 mois gratuit · 18 ans et plus · 0€ pour commencer</div>
+      <h1>Trouvez votre<br><em>véritable</em> connexion</h1>
+      <p class="hero-sub">Âme Sœur — la communauté de rencontres sérieuses ouverte à tous dès 18 ans. Profils vérifiés, chat en temps réel, matching intelligent.</p>
+      <div class="hero-actions">
+        <button class="btn-primary" onclick="openModal()">✨ Commencer — 1 mois gratuit</button>
+        <a href="#features" class="btn-ghost">🔍 Découvrir</a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat"><strong>12K+</strong><span>Membres</span></div>
+        <div class="stat"><strong>3K+</strong><span>Matchs</span></div>
+        <div class="stat"><strong>4.8★</strong><span>Note</span></div>
+      </div>
+    </div>
+    <div class="profiles-grid">
+      <div class="profile-mini"><div class="pm-img"><img src="https://randomuser.me/api/portraits/women/44.jpg" alt="" onerror="this.style.display='none'"/></div><div class="pm-body"><div class="pm-name">Camille, 24</div><div class="pm-info">📍 Lyon</div><div class="pm-tags"><span class="pm-tag">Voyages</span><span class="pm-tag">Art</span></div></div></div>
+      <div class="profile-mini"><div class="pm-img"><img src="https://randomuser.me/api/portraits/men/32.jpg" alt="" onerror="this.style.display='none'"/></div><div class="pm-body"><div class="pm-name">Thomas, 29</div><div class="pm-info">📍 Paris</div><div class="pm-tags"><span class="pm-tag">Sport</span><span class="pm-tag">Cuisine</span></div></div></div>
+      <div class="profile-mini"><div class="pm-img"><img src="https://randomuser.me/api/portraits/women/68.jpg" alt="" onerror="this.style.display='none'"/></div><div class="pm-body"><div class="pm-name">Amina, 31</div><div class="pm-info">📍 Abidjan</div><div class="pm-tags"><span class="pm-tag">Yoga</span><span class="pm-tag">Lecture</span></div></div></div>
+      <div class="profile-mini"><div class="pm-img"><img src="https://randomuser.me/api/portraits/men/75.jpg" alt="" onerror="this.style.display='none'"/></div><div class="pm-body"><div class="pm-name">Kofi, 35</div><div class="pm-info">📍 Dakar</div><div class="pm-tags"><span class="pm-tag">Musique</span><span class="pm-tag">Travel</span></div></div></div>
+    </div>
+  </section>
+
+  <section class="trial-section">
+    <p class="section-label" style="color:var(--rose-lt);">✦ Comment ça marche</p>
+    <h2 class="section-title" style="color:#fff;margin-bottom:.7rem;">1 mois gratuit, puis abonnement mensuel</h2>
+    <p class="section-sub" style="color:rgba(255,255,255,.7);margin:0 auto 2rem;">Accès complet pendant 30 jours. Après, un abonnement mensuel en USDT BEP-20.</p>
+    <div class="trial-steps">
+      <div class="trial-step"><div class="trial-num">1</div><h3>Inscription gratuite</h3><p>Profil complet avec photo</p></div>
+      <div class="trial-step"><div class="trial-num">2</div><h3>30 jours offerts</h3><p>Chat, matching, profils illimités</p></div>
+      <div class="trial-step"><div class="trial-num">3</div><h3>Après J+30</h3><p>Abonnement USDT BEP-20</p></div>
+    </div>
+    <button class="btn-white" onclick="openModal()">✨ Commencer gratuitement</button>
+  </section>
+
+  <section class="section" id="features">
+    <p class="section-label">✦ Fonctionnalités</p>
+    <h2 class="section-title">Tout pour des rencontres <em style="color:var(--rose)">vraies</em></h2>
+    <div class="features-grid">
+      <div class="feature-card"><div class="feature-icon">💬</div><div class="feature-title">Chat en temps réel</div><p class="feature-desc">Échangez directement avec vos matchs via notre messagerie instantanée.</p></div>
+      <div class="feature-card"><div class="feature-icon">❤️</div><div class="feature-title">Système de matching</div><p class="feature-desc">Likez les profils qui vous intéressent. Si c'est mutuel, le chat s'active !</p></div>
+      <div class="feature-card"><div class="feature-icon">👤</div><div class="feature-title">Profils complets</div><p class="feature-desc">Photo, bio, centres d'intérêt, pays, ville — tout pour se connaître vraiment.</p></div>
+      <div class="feature-card"><div class="feature-icon">🛡️</div><div class="feature-title">KYC & Sécurité</div><p class="feature-desc">Vérification d'identité pour une communauté 100% sûre et authentique.</p></div>
+      <div class="feature-card"><div class="feature-icon">🌍</div><div class="feature-title">International</div><p class="feature-desc">Membres de tous les pays. Rencontrez des personnes du monde entier.</p></div>
+      <div class="feature-card"><div class="feature-icon">🎉</div><div class="feature-title">Événements live</div><p class="feature-desc">Speed datings virtuels, clubs thématiques, soirées de rencontres.</p></div>
+    </div>
+  </section>
+
+  <section class="section" style="background:var(--blush);">
+    <p class="section-label">✦ Témoignages</p>
+    <h2 class="section-title">Des histoires <em style="color:var(--rose)">vraies</em></h2>
+    <div class="testi-grid">
+      <div class="testi"><div class="stars">★★★★★</div><p class="testi-text">"Le chat en temps réel change tout ! On a commencé à discuter et maintenant on est ensemble depuis 6 mois."</p><div class="testi-author"><div class="testi-av">🌸</div><div><div class="testi-name">Léa, 26 ans</div><div class="testi-sub">Paris · 2024</div></div></div></div>
+      <div class="testi"><div class="stars">★★★★★</div><p class="testi-text">"J'ai liké son profil, elle a liké le mien, et le chat s'est ouvert automatiquement. Simple et efficace !"</p><div class="testi-author"><div class="testi-av">🌿</div><div><div class="testi-name">Maxime, 43 ans</div><div class="testi-sub">Lyon · 2023</div></div></div></div>
+      <div class="testi"><div class="stars">★★★★★</div><p class="testi-text">"Les profils détaillés m'ont permis de trouver quelqu'un qui partage vraiment mes valeurs et passions."</p><div class="testi-author"><div class="testi-av">🦋</div><div><div class="testi-name">Amina, 57 ans</div><div class="testi-sub">Bordeaux · 2024</div></div></div></div>
+    </div>
+  </section>
+
+  <section class="cta-section">
+    <h2>Votre histoire commence aujourd'hui 💫</h2>
+    <p>1 mois d'accès complet offert. Chat en temps réel. Profils vérifiés. Zéro engagement.</p>
+    <button class="btn-white" onclick="openModal()">✨ Créer mon compte gratuit</button>
+  </section>
+
+  <footer>
+    <div><span class="footer-logo">Âme<span>Sœur</span></span><p>La plateforme de rencontres sérieuses ouverte à tous dès 18 ans.</p></div>
+    <div><h4>Découvrir</h4><ul><li><a href="#features">Fonctionnalités</a></li><li><a href="premium.html">Tarifs</a></li><li><a href="kyc.html">Vérification KYC</a></li></ul></div>
+    <div><h4>Contact</h4><ul><li><a href="mailto:paiement.amesoeur@gmail.com">paiement.amesoeur@gmail.com</a></li><li><a href="premium.html">Paiement USDT</a></li></ul></div>
+  </footer>
+  <div class="footer-bottom">© 2025 Âme Sœur — Fait avec ♥ · Tous droits réservés</div>
+</div>
+
+<!-- ═══ DASHBOARD ═══ -->
+<div id="dashboard">
+  <div class="dash-wrapper">
+
+    <div class="dash-header">
+      <div id="dash-avatar" class="dash-avatar" onclick="document.getElementById('photo-input').click()"></div>
+      <input type="file" id="photo-input" class="photo-input" accept="image/*" onchange="uploadPhoto(event)"/>
+      <div class="dash-info">
+        <h2>🌸 <span id="dash-prenom"></span></h2>
+        <p id="dash-email"></p>
+        <div class="dash-statut" id="dash-statut"></div>
+      </div>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-mini"><div class="num" id="stat-likes">0</div><div class="lbl">Likes reçus</div></div>
+      <div class="stat-mini"><div class="num" id="stat-matchs">0</div><div class="lbl">Matchs</div></div>
+      <div class="stat-mini"><div class="num" id="stat-membres">0</div><div class="lbl">Membres</div></div>
+    </div>
+
+    <div class="dash-tabs">
+      <button class="dash-tab active" data-tab="membres" onclick="switchTab('membres')">👥 Membres</button>
+      <button class="dash-tab" data-tab="profil" onclick="switchTab('profil')">👤 Mon profil</button>
+      <button class="dash-tab" data-tab="abonnement" onclick="switchTab('abonnement')">💎 Abonnement</button>
+    </div>
+
+    <!-- TAB MEMBRES -->
+    <div id="tab-membres" class="tab-content" style="display:block;">
+      <div id="membres-grid" class="membres-grid">
+        <div style="text-align:center;padding:2rem;color:#997080;grid-column:1/-1;">⏳ Chargement des membres...</div>
+      </div>
+    </div>
+
+    <!-- TAB PROFIL -->
+    <div id="tab-profil" class="tab-content">
+      <div class="profil-grid">
+        <div class="info-card">
+          <h3>👤 Informations</h3>
+          <div class="info-row"><span>Âge</span><strong id="dash-age"></strong></div>
+          <div class="info-row"><span>Genre</span><strong id="dash-genre"></strong></div>
+          <div class="info-row"><span>Pays</span><strong id="dash-pays"></strong></div>
+          <div class="info-row"><span>Ville</span><strong id="dash-ville"></strong></div>
+        </div>
+        <div class="info-card">
+          <h3>✍️ Ma bio</h3>
+          <div class="bio-text" id="dash-bio">Pas encore de bio...</div>
+          <div style="margin-top:.8rem;"><h3 style="font-size:.88rem;">🎯 Centres d'intérêt</h3><div id="dash-interets-list" style="margin-top:.5rem;"></div></div>
+        </div>
+      </div>
+
+      <div class="edit-section" id="edit-section">
+        <h3>✏️ Modifier mon profil</h3>
+        <div class="form-row">
+          <div class="form-group"><label>Pays</label><select id="edit-pays"><option value="">Sélectionner...</option></select></div>
+          <div class="form-group"><label>Ville</label><input type="text" id="edit-ville" placeholder="Votre ville"/></div>
+        </div>
+        <div class="form-group"><label>Bio</label><textarea id="edit-bio" placeholder="Parlez-nous de vous..."></textarea></div>
+        <div class="form-group"><label>Centres d'intérêt</label><div class="interets-grid" id="edit-interets"></div></div>
+        <button class="btn-action btn-action-rose" onclick="sauvegarderProfil()" style="margin-top:.5rem;">💾 Sauvegarder</button>
+      </div>
+
+      <div class="dash-action-btns">
+        <button class="btn-action btn-action-rose" onclick="toggleEditSection()">✏️ Modifier profil</button>
+        <button class="btn-action btn-action-gold" onclick="window.location.href='kyc.html'">🛡️ Vérification KYC</button>
+        <button class="btn-action btn-action-outline" onclick="deconnecter()">🚪 Déconnexion</button>
+      </div>
+      <div style="background:var(--blush);border-radius:12px;padding:.8rem;margin-top:.8rem;font-size:.76rem;color:#997080;text-align:center;">📸 Appuyez sur votre avatar pour changer votre photo de profil</div>
+    </div>
+
+    <!-- TAB ABONNEMENT -->
+    <div id="tab-abonnement" class="tab-content">
+      <div class="info-card">
+        <h3>💎 Mon abonnement</h3>
+        <div class="info-row"><span>Statut</span><strong id="dash-statut2"></strong></div>
+        <div style="margin-top:1rem;">
+          <p style="font-size:.82rem;color:#997080;margin-bottom:1rem;">Après votre mois gratuit, continuez avec un abonnement mensuel payé en USDT BEP-20.</p>
+          <div style="background:#f0faf7;border:1.5px solid rgba(38,161,123,.3);border-radius:12px;padding:1rem;margin-bottom:.8rem;">
+            <div style="font-size:.72rem;font-weight:700;color:#26A17B;margin-bottom:.4rem;">💲 ADRESSE USDT BEP-20</div>
+            <div style="font-family:monospace;font-size:.74rem;word-break:break-all;color:#1a4a3c;background:#fff;padding:.5rem;border-radius:8px;margin:.3rem 0;">0x9148754F3b287945de0f58014Fb955B28f9e0B4E</div>
+            <button onclick="navigator.clipboard.writeText('0x9148754F3b287945de0f58014Fb955B28f9e0B4E')" style="background:#26A17B;color:#fff;border:none;padding:.4rem .9rem;border-radius:8px;cursor:pointer;font-size:.72rem;font-family:'DM Sans',sans-serif;">📋 Copier</button>
+          </div>
+          <a href="premium.html" class="btn-action btn-action-gold" style="text-decoration:none;display:inline-flex;">💰 Voir les offres</a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ CHAT ═══ -->
+<div id="chat-section">
+  <div class="chat-header">
+    <button class="chat-back" onclick="fermerChat()">← Retour</button>
+    <div id="chat-avatar"></div>
+    <div class="chat-user-info">
+      <h3 id="chat-nom"></h3>
+      <p>En ligne</p>
+    </div>
+  </div>
+  <div id="messages-container"></div>
+  <div class="chat-input-area">
+    <textarea id="message-input" placeholder="Écrivez votre message..." onkeydown="chatKeydown(event)" rows="1"></textarea>
+    <button class="btn-send" onclick="envoyerMessage()">➤</button>
+  </div>
+</div>
+
+<!-- ═══ PAIEMENT REQUIS ═══ -->
+<div id="payment-required">
+  <div class="pay-card">
+    <div style="font-size:2.8rem;margin-bottom:1rem;">⏰</div>
+    <h2>Votre mois gratuit est terminé</h2>
+    <p>Votre période d'essai de 30 jours est expirée. Souscrivez à un abonnement mensuel en USDT BEP-20 pour continuer.</p>
+    <div class="usdt-box">
+      <div style="font-size:.7rem;font-weight:700;color:#26A17B;margin-bottom:.4rem;">💲 ADRESSE USDT BEP-20</div>
+      <div class="usdt-addr">0x9148754F3b287945de0f58014Fb955B28f9e0B4E</div>
+      <button class="btn-copy" onclick="navigator.clipboard.writeText('0x9148754F3b287945de0f58014Fb955B28f9e0B4E')">📋 Copier</button>
+    </div>
+    <p style="font-size:.76rem;">Envoyez le hash de transaction à <strong>paiement.amesoeur@gmail.com</strong></p>
+    <div style="display:flex;gap:.7rem;justify-content:center;margin-top:1.2rem;flex-wrap:wrap;">
+      <button class="btn-primary" onclick="window.location.href='premium.html'">Voir les offres →</button>
+      <button class="btn-action btn-action-outline" onclick="deconnecter()">Se déconnecter</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL PROFIL MEMBRE ═══ -->
+<div class="modal-overlay" id="profil-modal" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('profil-modal')">✕</button>
+    <div id="profil-photo" class="profil-photo-big"></div>
+    <h2 id="profil-nom"></h2>
+    <p id="profil-localisation" style="color:#997080;font-size:.82rem;margin-bottom:.5rem;"></p>
+    <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem;font-size:.8rem;"><span style="color:#997080;">Genre :</span><strong id="profil-genre" style="color:var(--dark);margin-left:.3rem;"></strong></div>
+    <div style="background:var(--blush);border-radius:12px;padding:.9rem;margin-bottom:.8rem;">
+      <div style="font-size:.74rem;font-weight:600;color:var(--rose);margin-bottom:.3rem;">✍️ Bio</div>
+      <div id="profil-bio" style="font-size:.82rem;color:var(--text);line-height:1.6;"></div>
+    </div>
+    <div style="margin-bottom:1rem;"><div style="font-size:.74rem;font-weight:600;color:var(--rose);margin-bottom:.4rem;">🎯 Centres d'intérêt</div><div id="profil-interets"></div></div>
+    <div class="profil-actions">
+      <button id="profil-like-btn" class="btn-action btn-action-rose">🤍 Liker</button>
+      <button id="profil-chat-btn" class="btn-action" style="background:linear-gradient(135deg,var(--green),#1a9c50);color:#fff;display:none;">💬 Envoyer un message</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL INSCRIPTION ═══ -->
+<div class="modal-overlay" id="modal" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <h2>Rejoignez-nous 💗</h2>
+    <p>Créez votre profil — 1 mois gratuit, sans carte bancaire.</p>
+    <div class="form-row">
+      <div class="form-group"><label>Prénom *</label><input type="text" id="reg-prenom" placeholder="Votre prénom"/></div>
+      <div class="form-group"><label>Âge *</label><input type="number" id="reg-age" placeholder="25" min="18"/></div>
+    </div>
+    <div class="form-group"><label>Email *</label><input type="email" id="reg-email" placeholder="vous@email.com"/></div>
+    <div class="form-group"><label>Mot de passe *</label><input type="password" id="reg-password" placeholder="Min. 6 caractères"/></div>
+    <div class="form-row">
+      <div class="form-group"><label>Genre *</label><select id="reg-genre"><option value="">Sélectionner...</option><option>Une femme</option><option>Un homme</option><option>Non-binaire</option><option>Préfère ne pas préciser</option></select></div>
+      <div class="form-group"><label>Pays *</label><select id="reg-pays"><option value="">Sélectionner...</option></select></div>
+    </div>
+    <div class="form-group"><label>Ville</label><input type="text" id="reg-ville" placeholder="Votre ville"/></div>
+    <div class="form-group"><label>Bio courte</label><textarea id="reg-bio" placeholder="Parlez-nous de vous en quelques mots..."></textarea></div>
+    <div class="form-group"><label>Centres d'intérêt</label><div class="interets-grid" id="reg-interets"></div></div>
+    <button class="btn-submit" id="btn-inscrire" onclick="inscrire()">✨ Créer mon profil gratuit</button>
+    <div class="modal-footer">Déjà membre ? <a onclick="closeModal();openLoginModal()">Se connecter</a></div>
+  </div>
+</div>
+
+<!-- ═══ MODAL CONNEXION ═══ -->
+<div class="modal-overlay" id="login-modal" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeLoginModal()">✕</button>
+    <h2>Se connecter 🌸</h2>
+    <p>Accédez à votre espace membre.</p>
+    <div class="form-group"><label>Email *</label><input type="email" id="login-email" placeholder="vous@email.com"/></div>
+    <div class="form-group"><label>Mot de passe *</label><input type="password" id="login-password" placeholder="Votre mot de passe"/></div>
+    <button class="btn-submit" id="btn-connecter" onclick="connecter()">Se connecter</button>
+    <div class="modal-footer">Pas encore membre ? <a onclick="closeLoginModal();openModal()">S'inscrire gratuitement</a></div>
+  </div>
+</div>
+
+</body>
+</html>
